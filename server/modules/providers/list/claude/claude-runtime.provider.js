@@ -291,6 +291,10 @@ function mapCliOptionsToSDK(options = {}) {
 
   sdkOptions.settingSources = ['project', 'user', 'local'];
 
+  // Without this the SDK reports only SessionStart and Setup hooks; the rest
+  // (PreToolUse, PostToolUse, Stop…) run but are invisible to the chat.
+  sdkOptions.includeHookEvents = true;
+
   // The SDK resumes with the provider-native session id, never the app id.
   // `resumeFromScratch` is set when the very first prompt of a conversation was
   // edited: there is nothing before it to resume through, so the turn has to

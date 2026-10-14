@@ -306,6 +306,32 @@ export type CompactionInfo = {
   error?: string | null;
 };
 
+/**
+ * One hook run, as the CLI reports it once the hook has finished.
+ *
+ * Built from the SDK's `hook_response` system event and carried on an ordinary
+ * assistant text row, so a client that knows nothing of `hook` still reads the
+ * sentence in `content`. `decision` is what the hook told the CLI to do with
+ * the pending action: `deny` and `block` refuse it, `ask` hands it to the user.
+ * It is absent when the hook only informed. Used by the Claude sessions
+ * provider and mirrored in the frontend's shared types.
+ */
+export type HookInfo = {
+  /** The hook's name as the CLI reports it, e.g. `PreToolUse:Read`. */
+  name: string;
+  /** The lifecycle event that fired it, e.g. `PreToolUse` or `SessionStart`. */
+  event: string;
+  outcome: 'success' | 'error' | 'cancelled';
+  exitCode?: number;
+  decision?: 'allow' | 'deny' | 'ask' | 'block';
+  /** Why the hook decided as it did, when it said. */
+  reason?: string;
+  /** The hook's `systemMessage`: text it wants the user to see. */
+  systemMessage?: string;
+  /** What the hook printed, when it printed something that is not JSON. */
+  output?: string;
+};
+
 export type NormalizedMessage = {
   id: string;
   /**
@@ -354,6 +380,8 @@ export type NormalizedMessage = {
   isCompactSummary?: boolean;
   /** Set on the row that stands in for a compaction, so the UI can draw it as one. */
   compact?: CompactionInfo;
+  /** Set on the row that reports a finished hook run, so the UI can draw it as one. */
+  hook?: HookInfo;
   images?: unknown;
   /** Non-image files attached to a user turn after provider history normalization. */
   files?: unknown;

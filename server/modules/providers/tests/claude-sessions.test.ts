@@ -2189,3 +2189,91 @@ test('synchronizeFile skips non-jsonl files', { concurrency: false }, async () =
     assert.equal(result, null);
   });
 });
+
+test('a finished hook becomes one assistant row that carries what it decided', () => {
+  const provider = new ClaudeSessionsProvider();
+  const normalize = (raw: Record<string, unknown>) =>
+    provider.normalizeMessage(
+      { type: 'system', subtype: 'hook_response', session_id: 'hook-session', uuid: 'evt-hook', hook_id: 'h1', ...raw },
+      'hook-session',
+    );
+
+  // A PreToolUse verdict printed as the CLI's documented JSON.
+  const [denied] = normalize({
+    hook_name: 'PreToolUse:Read',
+    hook_event: 'PreToolUse',
+    outcome: 'success',
+    exit_code: 0,
+    stdout: JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'Étape 0 : lire d\'abord le digest',
+      },
+    }),
+  });
+  assert.equal(denied?.kind, 'text');
+  assert.equal(denied?.role, 'assistant');
+  assert.equal(denied?.hook?.decision, 'deny');
+  assert.equal(denied?.hook?.reason, 'Étape 0 : lire d\'abord le digest');
+  assert.equal(denied?.content, 'Hook PreToolUse:Read · denied: Étape 0 : lire d\'abord le digest');
+
+  // Exit code 2 is the CLI's own "block", with stderr as the reason.
+  const [blocked] = normalize({
+    hook_name: 'PreToolUse:Bash',
+    hook_event: 'PreToolUse',
+    outcome: 'error',
+    exit_code: 2,
+    stdout: '',
+    stderr: 'no force pushes',
+  });
+  assert.equal(blocked?.hook?.decision, 'block');
+  assert.equal(blocked?.hook?.reason, 'no force pushes');
+
+  // A SessionStart hook informs through `systemMessage` and decides nothing.
+  const [informed] = normalize({
+    hook_name: 'SessionStart:startup',
+    hook_event: 'SessionStart',
+    outcome: 'success',
+    exit_code: 0,
+    stdout: JSON.stringify({ systemMessage: 'Sync .claude : 3 fichiers' }),
+  });
+  assert.equal(informed?.hook?.decision, undefined);
+  assert.equal(informed?.hook?.systemMessage, 'Sync .claude : 3 fichiers');
+  assert.equal(informed?.content, 'Hook SessionStart:startup · Sync .claude : 3 fichiers');
+
+  // Output that is not JSON is kept as plain text.
+  const [plain] = normalize({
+    hook_name: 'PostToolUse:Edit',
+    hook_event: 'PostToolUse',
+    outcome: 'success',
+    exit_code: 0,
+    stdout: 'formatted 1 file',
+  });
+  assert.equal(plain?.hook?.output, 'formatted 1 file');
+});
+
+test('a hook that ran quietly produces no row, and the other hook events still produce none', () => {
+  const provider = new ClaudeSessionsProvider();
+  const normalize = (raw: Record<string, unknown>) =>
+    provider.normalizeMessage(
+      { type: 'system', session_id: 'hook-session', uuid: 'evt-hook', hook_id: 'h1', hook_name: 'PreToolUse:Read', hook_event: 'PreToolUse', ...raw },
+      'hook-session',
+    );
+
+  // Every tool call fires these; a row for each allow would bury the chat.
+  assert.deepEqual(normalize({ subtype: 'hook_response', outcome: 'success', exit_code: 0, stdout: '', stderr: '' }), []);
+  assert.deepEqual(normalize({
+    subtype: 'hook_response',
+    outcome: 'success',
+    exit_code: 0,
+    stdout: JSON.stringify({ hookSpecificOutput: { permissionDecision: 'allow' } }),
+  }), []);
+
+  // A hook that failed is always worth a row, even with nothing printed.
+  assert.equal(normalize({ subtype: 'hook_response', outcome: 'error', exit_code: 1, stdout: '' })[0]?.hook?.outcome, 'error');
+
+  // The start and progress events say nothing the response does not.
+  assert.deepEqual(normalize({ subtype: 'hook_started' }), []);
+  assert.deepEqual(normalize({ subtype: 'hook_progress', stdout: 'x', stderr: '', output: 'x' }), []);
+});

@@ -338,6 +338,23 @@ export type CompactionInfo = {
   error?: string | null;
 };
 
+/**
+ * One finished hook run, as the backend reports it on an assistant text row.
+ * `decision` is what the hook told the CLI to do with the pending action
+ * (`deny` and `block` refuse it, `ask` hands it to the user) and is absent when
+ * the hook only informed. Drawn as a collapsed row, with refusals highlighted.
+ */
+export type HookInfo = {
+  name: string;
+  event: string;
+  outcome: 'success' | 'error' | 'cancelled';
+  exitCode?: number;
+  decision?: 'allow' | 'deny' | 'ask' | 'block';
+  reason?: string;
+  systemMessage?: string;
+  output?: string;
+};
+
 /** Where a background task — a spawned agent, a workflow run or a backgrounded command — stands: `stopped` is one whose session process ended before it reported, so no outcome exists and none is coming. */
 export type BackgroundTaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
@@ -395,6 +412,8 @@ export type ChatMessage = {
   isCompactSummary?: boolean;
   /** Set on the row that stands in for a compaction, so it is drawn as one. */
   compact?: CompactionInfo;
+  /** Set on the row that stands in for a hook run, so it is drawn as one. */
+  hook?: HookInfo;
   /** The summary that compaction produced, folded into the row above rather than left loose. */
   compactSummary?: string;
   isSubagentContainer?: boolean;
@@ -557,6 +576,8 @@ export type NormalizedMessage = {
   isCompactSummary?: boolean;
   /** Set by the provider on the row that stands in for a compaction. */
   compact?: CompactionInfo;
+  /** Set by the provider on the row that reports a finished hook run. */
+  hook?: HookInfo;
   images?: Array<{ path?: string; data?: string; name?: string }>;
   files?: Array<{ path?: string; name?: string; mimeType?: string; size?: number }>;
   toolName?: string;

@@ -192,6 +192,60 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
             </details>
           )}
         </div>
+      ) : message.hook ? (
+        /* A hook run: one collapsed line, a refusal in red, the detail one click away */
+        <details className="w-full py-0.5">
+          <summary className="flex cursor-pointer list-none items-start gap-2">
+            <span
+              className={`mt-1.5 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full ${
+                message.hook.decision === 'deny' || message.hook.decision === 'block' || message.hook.outcome === 'error'
+                  ? 'bg-red-500 dark:bg-red-400'
+                  : message.hook.decision === 'ask'
+                    ? 'bg-amber-400 dark:bg-amber-500'
+                    : 'bg-gray-400 dark:bg-gray-500'
+              }`}
+            />
+            <span
+              className={`min-w-0 break-words text-xs ${
+                message.hook.decision === 'deny' || message.hook.decision === 'block'
+                  ? 'font-medium text-red-600 dark:text-red-400'
+                  : 'text-gray-500 dark:text-gray-400'
+              }`}
+            >
+              {message.content}
+            </span>
+          </summary>
+          <dl className="ml-3.5 mt-1 space-y-1 text-xs text-gray-500 dark:text-gray-400">
+            <div>
+              <dt className="inline font-medium">{t('chat:misc.hookEvent', 'Event')}: </dt>
+              <dd className="inline">{message.hook.event}</dd>
+            </div>
+            <div>
+              <dt className="inline font-medium">{t('chat:misc.hookOutcome', 'Outcome')}: </dt>
+              <dd className="inline">
+                {message.hook.outcome}
+                {message.hook.exitCode !== undefined && ` (exit ${message.hook.exitCode})`}
+              </dd>
+            </div>
+            {message.hook.reason && (
+              <div>
+                <dt className="inline font-medium">{t('chat:misc.hookReason', 'Reason')}: </dt>
+                <dd className="inline whitespace-pre-wrap break-words">{message.hook.reason}</dd>
+              </div>
+            )}
+            {message.hook.systemMessage && (
+              <div>
+                <dt className="inline font-medium">{t('chat:misc.hookMessage', 'Message')}: </dt>
+                <dd className="inline whitespace-pre-wrap break-words">{message.hook.systemMessage}</dd>
+              </div>
+            )}
+            {message.hook.output && (
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/60 p-2 font-mono">
+                {message.hook.output}
+              </pre>
+            )}
+          </dl>
+        </details>
       ) : message.isTaskNotification ? (
         /* Compact task notification on the left */
         <div className="w-full">

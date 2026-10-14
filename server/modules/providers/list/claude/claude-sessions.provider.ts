@@ -9,6 +9,7 @@ import type {
   CompactionInfo,
   FetchHistoryOptions,
   FetchHistoryResult,
+  HookInfo,
   NormalizedMessage,
   SubagentActivity,
   SubagentInfo,
@@ -1116,6 +1117,92 @@ function readWorkflowAgentsProgress(value: unknown): WorkflowAgentProgress[] | u
 }
 
 /**
+ * Reads a `hook_response` event into the facts worth showing, or returns null
+ * when the hook ran and had nothing to say.
+ *
+ * Every tool call fires its PreToolUse and PostToolUse hooks, and most hooks
+ * allow silently, so a row for each would bury the conversation. A run is only
+ * reported when it failed, was cancelled, decided something other than `allow`,
+ * or printed anything at all.
+ *
+ * A hook speaks in the JSON it prints on stdout: `systemMessage` for the user,
+ * `hookSpecificOutput.permissionDecision` for a PreToolUse verdict, and the
+ * older top-level `decision: 'block'`. Exit code 2 is the CLI's own "block this"
+ * signal and takes stderr as the reason. Anything on stdout that is not JSON is
+ * kept as plain `output`.
+ */
+function readHookResponse(raw: AnyRecord): HookInfo | null {
+  const name = readOptionalString(raw.hook_name);
+  const event = readOptionalString(raw.hook_event);
+  if (!name || !event) {
+    return null;
+  }
+
+  const outcome = raw.outcome === 'error' || raw.outcome === 'cancelled' ? raw.outcome : 'success';
+  const exitCode = readOptionalNumber(raw.exit_code);
+  const stdout = (readOptionalString(raw.stdout) ?? readOptionalString(raw.output) ?? '').trim();
+  const stderr = (readOptionalString(raw.stderr) ?? '').trim();
+
+  let parsed: AnyRecord | null = null;
+  if (stdout.startsWith('{')) {
+    try {
+      parsed = readObjectRecord(JSON.parse(stdout));
+    } catch {
+      // Not JSON after all: it is shown as plain output below.
+    }
+  }
+
+  const specific = readObjectRecord(parsed?.hookSpecificOutput);
+  const permission = readOptionalString(specific?.permissionDecision);
+  let decision: HookInfo['decision'];
+  if (permission === 'allow' || permission === 'deny' || permission === 'ask') {
+    decision = permission;
+  } else if (parsed?.decision === 'block') {
+    decision = 'block';
+  } else if (exitCode === 2) {
+    decision = 'block';
+  }
+
+  const systemMessage = readOptionalString(parsed?.systemMessage);
+  const reason = readOptionalString(specific?.permissionDecisionReason)
+    ?? readOptionalString(parsed?.reason)
+    ?? (decision === 'block' && !parsed ? stderr || undefined : undefined);
+  // JSON is already unpacked above; only text that is not is worth echoing.
+  const output = parsed ? undefined : (stdout || stderr || undefined);
+
+  const informs = Boolean(systemMessage || reason || output);
+  if (outcome === 'success' && (!decision || decision === 'allow') && !informs) {
+    return null;
+  }
+
+  return { name, event, outcome, exitCode, decision, reason, systemMessage, output };
+}
+
+/**
+ * The one sentence a client that does not know about `hook` reads for a hook
+ * row, e.g. `Hook PreToolUse:Read · denied: Étape 0 : lire d'abord le digest`.
+ */
+function describeHookRun(hook: HookInfo): string {
+  const verdict = hook.decision === 'deny' || hook.decision === 'block'
+    ? 'denied'
+    : hook.decision === 'ask'
+      ? 'asked for confirmation'
+      : hook.outcome === 'error'
+        ? 'failed'
+        : hook.outcome === 'cancelled'
+          ? 'cancelled'
+          : null;
+  const detail = hook.reason ?? hook.systemMessage ?? hook.output;
+  const said = [`Hook ${hook.name}`];
+  if (verdict) {
+    said.push(detail ? `${verdict}: ${detail}` : verdict);
+  } else if (detail) {
+    said.push(detail);
+  }
+  return said.join(' · ');
+}
+
+/**
  * Maps one of the SDK's four background-task `system` events onto the
  * `task_status` fields, or returns null for any other `system` subtype.
  *
@@ -1257,6 +1344,26 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           ...taskStatus,
         })];
       }
+    }
+
+    // A hook is reported once, when it finishes. `hook_started` and
+    // `hook_progress` say nothing the final response does not, and would turn
+    // one hook into three rows, so they still normalize to nothing.
+    if (raw.type === 'system' && raw.subtype === 'hook_response') {
+      const hook = readHookResponse(raw);
+      if (!hook) {
+        return [];
+      }
+      return [createNormalizedMessage({
+        id: `${baseId}_hook`,
+        sessionId,
+        timestamp: ts,
+        provider: PROVIDER,
+        kind: 'text',
+        role: 'assistant',
+        content: describeHookRun(hook),
+        hook,
+      })];
     }
 
     // A compaction is the most expensive thing a long session does without
